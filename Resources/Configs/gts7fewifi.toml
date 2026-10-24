@@ -1,0 +1,29 @@
+# Recovery header and DT inputs from SM-T733 CHN T733ZCS9DYE1.
+# The firmware layout and input sources are in notes/RELEASE_STRUCTURE.md.
+[boot_shim]
+requires_kernel_header = true
+
+[uefi_fd]
+base = 0x9FC41000
+size = 0x002BF000
+
+[boot_image_kernel]
+kernel_compression = "gzip"
+append_dtb = false
+
+[boot_image]
+header_version = 2
+pagesize = 4096
+base = "0x0"
+board = "SRPUF17A009"
+kernel_offset = "0x00008000"
+ramdisk_offset = "0x02000000"
+second_offset = "0x00000000"
+tags_offset = "0x01e00000"
+dtb_offset = "0x01f00000"
+dtb = "Resources/DTBs/gts7fewifi.dtb"
+recovery_dtbo = "Resources/DTBs/gts7fewifi-recovery.dtbo"
+os_version = "11.0.0"
+os_patch_level = "2025-03"
+cmdline = "console=null androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 video=vfb:640x400,bpp=32,memsize=3072000 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=a600000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket firmware_class.path=/vendor/firmware_mnt/image pcie_ports=compat loop.max_part=7 iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 printk.devkmsg=on"
+samsung_trailer = true

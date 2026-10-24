@@ -1,5 +1,11 @@
 # Project Silicium UEFI for ARM64-Based Devices
 
+The `unixnu-sm-t733` branch contains the Samsung Galaxy Tab S7 FE Wi-Fi
+(SM-T733, SM7325) UniXNU firmware adaptation. Start with the
+[SM-T733 build and external-input instructions](notes/RELEASE_STRUCTURE.md).
+The platform source, USB patch generators and packaging tools are included;
+the documented vendor and Samsung firmware inputs are imported locally.
+
 <!-- ![Banner](https://github.com/Project-Silicium/Mu-Silicium/blob/main/Resources/Pictures/Banner.png) -->
 
 ## Description

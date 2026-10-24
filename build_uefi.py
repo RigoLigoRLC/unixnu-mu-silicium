@@ -323,6 +323,7 @@ def create_android_boot_img (ctx: BuildContext, image_kernel_config: dict, image
 
     # Set Output File Name
     output_file_name = f"Mu-{ctx.device}-{ctx.device_model}.img" if add_output_suffix else f"Mu-{ctx.device}.img"
+    output_file_name = image_config.get ("output_name", output_file_name)
 
     # Set Base mkbootimg Command
     cmd = [
@@ -335,6 +336,7 @@ def create_android_boot_img (ctx: BuildContext, image_kernel_config: dict, image
     # mkbootimg Argument Map
     argument_map = {
         "base":           "--base",
+        "board":          "--board",
         "cmdline":        "--cmdline",
         "dtb":            "--dtb",
         "dtb_offset":     "--dtb_offset",
@@ -342,7 +344,9 @@ def create_android_boot_img (ctx: BuildContext, image_kernel_config: dict, image
         "kernel_offset":  "--kernel_offset",
         "os_patch_level": "--os_patch_level",
         "os_version":     "--os_version",
+        "pagesize":       "--pagesize",
         "ramdisk_offset": "--ramdisk_offset",
+        "recovery_dtbo":  "--recovery_dtbo",
         "second_offset":  "--second_offset",
         "tags_offset":    "--tags_offset"
     }
@@ -353,12 +357,19 @@ def create_android_boot_img (ctx: BuildContext, image_kernel_config: dict, image
         value = image_config.get (key)
 
         # Append Argument Value
-        if value:
+        if value is not None:
             cmd.append (option)
             cmd.append (str (value))
 
-    # Execute mkbootimg Command
-    return subprocess.run (cmd).returncode == 0
+    # mkbootimg places recovery DTBO and DTB after the new kernel and ramdisk.
+    if subprocess.run (cmd).returncode != 0:
+        return False
+
+    if image_config.get ("samsung_trailer", False):
+        with open (output_file_name, "ab") as output_file:
+            output_file.write (b"SEANDROIDENFORCE")
+
+    return True
 
 def create_payload_file (ctx: BuildContext, payload_config: dict, append_boot_shim: bool, add_output_suffix: bool) -> bool:
     # Set Output File Name

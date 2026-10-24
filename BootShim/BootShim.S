@@ -37,6 +37,8 @@ _Dead:
   b     _Dead
 
 .text
+// Emit the address constants before the appended firmware begins.
+.ltorg
 .align 4
 
 _Payload:

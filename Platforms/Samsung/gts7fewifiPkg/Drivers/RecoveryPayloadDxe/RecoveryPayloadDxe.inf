@@ -1,0 +1,39 @@
+[Defines]
+  INF_VERSION = 0x0001001B
+  BASE_NAME = RecoveryPayloadDxe
+  FILE_GUID = 4F2DFD58-02C5-44B8-B690-4F3182D8B0B3
+  MODULE_TYPE = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT = RecoveryPayloadEntryPoint
+
+[Sources]
+  RecoveryPayload.c
+  UserdataPayload.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  MemoryAllocationLib
+  PrintLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+  gEfiRamDiskProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+
+[Guids]
+  gEfiVirtualDiskGuid
+
+[Depex]
+  TRUE

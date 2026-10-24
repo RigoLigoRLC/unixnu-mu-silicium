@@ -1,0 +1,130 @@
+diff --git a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
+index 4c9df94..2d3f5d9 100644
+--- a/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
++++ b/MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c
+@@ -33,6 +33,61 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ #include "DxeMain.h"
+ 
++#if defined (T733_UFS_DIAGNOSTICS)
++#include <Guid/T733UfsDispatch.h>
++
++STATIC EFI_GUID mT733UfsFileGuid = {
++  0x0D35CD8E, 0x97EA, 0x4F9A, {0x96, 0xAF, 0x0F, 0x0D, 0x89, 0xF7, 0x65, 0x67}
++};
++STATIC EFI_GUID           mT733UfsDispatchGuid = T733_UFS_DISPATCH_GUID;
++STATIC EFI_HANDLE         mT733UfsDispatchHandle;
++STATIC T733_UFS_DISPATCH   mT733UfsDispatch;
++
++STATIC
++VOID
++RecordT733UfsDispatch (
++  IN EFI_GUID   *FileName,
++  IN UINT32     Phase,
++  IN EFI_STATUS Status
++  )
++{
++  EFI_STATUS PublishStatus;
++
++  if (!CompareGuid (FileName, &mT733UfsFileGuid)) {
++    return;
++  }
++
++  if (Phase == T733_UFS_SELECTED) {
++    mT733UfsDispatch.LoadStatus = EFI_NOT_STARTED;
++    mT733UfsDispatch.StartStatus = EFI_NOT_STARTED;
++  } else if (Phase == T733_UFS_LOAD_COMPLETE) {
++    mT733UfsDispatch.LoadStatus = Status;
++  } else if (Phase == T733_UFS_STARTING) {
++    mT733UfsDispatch.BootMagic = *(volatile UINT32 *)(UINTN)0x146AA000;
++    mT733UfsDispatch.BootVersion = *(volatile UINT32 *)(UINTN)0x146AA004;
++    mT733UfsDispatch.BootDevice = *(volatile UINT32 *)(UINTN)0x146AA050;
++    DEBUG ((DEBUG_WARN, "T733: UFSDxe IMEM magic=%08x version=%u bootdev=%u\n",
++            mT733UfsDispatch.BootMagic, mT733UfsDispatch.BootVersion,
++            mT733UfsDispatch.BootDevice));
++  } else if (Phase == T733_UFS_START_COMPLETE) {
++    mT733UfsDispatch.StartStatus = Status;
++  }
++
++  mT733UfsDispatch.Phase = Phase;
++  if (mT733UfsDispatchHandle == NULL) {
++    PublishStatus = CoreInstallProtocolInterface (
++                      &mT733UfsDispatchHandle,
++                      &mT733UfsDispatchGuid,
++                      EFI_NATIVE_INTERFACE,
++                      &mT733UfsDispatch
++                      );
++    DEBUG ((DEBUG_WARN, "T733: UFSDxe dispatch status protocol: %r\n", PublishStatus));
++  }
++
++  DEBUG ((DEBUG_WARN, "T733: UFSDxe dispatch phase=%u status=%r\n", Phase, Status));
++}
++#endif
++
+ //
+ // The Driver List contains one copy of every driver that has been discovered.
+ // Items are never removed from the driver list. List of EFI_CORE_DRIVER_ENTRY
+@@ -452,6 +507,9 @@ CoreDispatcher (
+       // skip the LoadImage
+       //
+       if ((DriverEntry->ImageHandle == NULL) && !DriverEntry->IsFvImage) {
++#if defined (T733_UFS_DIAGNOSTICS)
++        RecordT733UfsDispatch (&DriverEntry->FileName, T733_UFS_SELECTED, EFI_NOT_STARTED);
++#endif
+         DEBUG ((DEBUG_INFO, "Loading driver %g\n", &DriverEntry->FileName));
+         Status = CoreLoadImage (
+                    FALSE,
+@@ -462,6 +520,10 @@ CoreDispatcher (
+                    &DriverEntry->ImageHandle
+                    );
+ 
++#if defined (T733_UFS_DIAGNOSTICS)
++        RecordT733UfsDispatch (&DriverEntry->FileName, T733_UFS_LOAD_COMPLETE, Status);
++#endif
++
+         //
+         // Update the driver state to reflect that it's been loaded
+         //
+@@ -517,7 +579,13 @@ CoreDispatcher (
+           );
+         ASSERT (DriverEntry->ImageHandle != NULL);
+ 
++#if defined (T733_UFS_DIAGNOSTICS)
++        RecordT733UfsDispatch (&DriverEntry->FileName, T733_UFS_STARTING, EFI_NOT_STARTED);
++#endif
+         Status = CoreStartImage (DriverEntry->ImageHandle, NULL, NULL);
++#if defined (T733_UFS_DIAGNOSTICS)
++        RecordT733UfsDispatch (&DriverEntry->FileName, T733_UFS_START_COMPLETE, Status);
++#endif
+ 
+         REPORT_STATUS_CODE_WITH_EXTENDED_DATA (
+           EFI_PROGRESS_CODE,
+diff --git a/MdeModulePkg/Include/Guid/T733UfsDispatch.h b/MdeModulePkg/Include/Guid/T733UfsDispatch.h
+new file mode 100644
+index 0000000..92f0e33
+--- /dev/null
++++ b/MdeModulePkg/Include/Guid/T733UfsDispatch.h
+@@ -0,0 +1,23 @@
++#ifndef T733_UFS_DISPATCH_H_
++#define T733_UFS_DISPATCH_H_
++
++#define T733_UFS_DISPATCH_GUID \
++  { 0x92124B17, 0x7456, 0x4B4B, { 0x8A, 0x27, 0x12, 0xD9, 0x59, 0xF3, 0x86, 0x72 } }
++
++#define T733_UFS_SELECTED       1
++#define T733_UFS_LOAD_COMPLETE  2
++#define T733_UFS_STARTING       3
++#define T733_UFS_START_COMPLETE 4
++
++// T733_UFS_DISPATCH retains the original dispatcher's UFSDxe results after
++// StartImage returns. RecoveryPayloadDxe reads this protocol without changing it.
++typedef struct {
++  UINT32      Phase;
++  EFI_STATUS  LoadStatus;
++  EFI_STATUS  StartStatus;
++  UINT32      BootMagic;    // Shared IMEM values captured before UFSDxe starts.
++  UINT32      BootVersion;
++  UINT32      BootDevice;
++} T733_UFS_DISPATCH;
++
++#endif

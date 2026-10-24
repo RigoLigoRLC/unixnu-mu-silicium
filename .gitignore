@@ -9,3 +9,25 @@ BootShim.elf
 
 Mu-*.*
 *:Zone.Identifier
+
+# SM-T733 inputs are imported as documented in notes/RELEASE_STRUCTURE.md.
+/Platforms/Samsung/gts7fewifiPkg/Vendor/QcomPkg/
+/Platforms/Samsung/gts7fewifiPkg/Vendor/PatchedBinaries/*
+!/Platforms/Samsung/gts7fewifiPkg/Vendor/PatchedBinaries/UsbMsdDxe.inf
+!/Platforms/Samsung/gts7fewifiPkg/Vendor/PatchedBinaries/UsbfnDwc3Dxe.inf
+/Platforms/Samsung/gts7fewifiPkg/Vendor/RawFiles/*
+!/Platforms/Samsung/gts7fewifiPkg/Vendor/RawFiles/uefipil.cfg
+/Resources/DTBs/gts7fewifi*.dtb
+/Resources/DTBs/gts7fewifi*.dtbo
+/.cache/
+/out/
+/logs/
+/local.toml
+*.img
+*.tar
+*.tar.md5
+*.efi
+*.depex
+*.o
+*.pyc
+.DS_Store

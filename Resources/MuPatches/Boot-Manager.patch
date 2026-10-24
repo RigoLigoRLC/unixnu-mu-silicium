@@ -1,5 +1,5 @@
 diff --git a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c
-index ef19319614..72b399bfa0 100644
+index 5bba6ea..416b147 100644
 --- a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c
 +++ b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.c
 @@ -6,6 +6,8 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
@@ -32,7 +32,7 @@ index ef19319614..72b399bfa0 100644
    ASSERT (BootMenuData->PtrTokens != NULL);
  
    //
-@@ -399,10 +401,19 @@ InitializeBootMenuData (
+@@ -399,10 +401,23 @@ InitializeBootMenuData (
                                              );
    }
  
@@ -50,10 +50,14 @@ index ef19319614..72b399bfa0 100644
    BootMenuData->HelpToken[0] = STRING_TOKEN (STR_BOOT_POPUP_MENU_HELP1_STRING);
    BootMenuData->HelpToken[1] = STRING_TOKEN (STR_BOOT_POPUP_MENU_HELP2_STRING);
 -  BootMenuData->HelpToken[2] = STRING_TOKEN (STR_BOOT_POPUP_MENU_HELP3_STRING);
++#if defined (T733_VENDOR_POWER_KEY)
++  BootMenuData->HelpToken[0] = HiiSetString (gStringPackHandle, 0, L"Volume Up/Down: move selection", NULL);
++  BootMenuData->HelpToken[1] = HiiSetString (gStringPackHandle, 0, L"Power or Enter: select", NULL);
++#endif
    InitializeBootMenuScreen (BootMenuData);
    BootMenuData->SelectItem = 0;
    return EFI_SUCCESS;
-@@ -468,7 +479,7 @@ BootMenuSelectItem (
+@@ -468,7 +483,7 @@ BootMenuSelectItem (
        BootMenuData->ScrollBarControl.LastItem  = WantSelectItem;
      }
  
@@ -62,7 +66,7 @@ index ef19319614..72b399bfa0 100644
      FirstItem   = BootMenuData->ScrollBarControl.FirstItem;
      LastItem    = BootMenuData->ScrollBarControl.LastItem;
      TopShadeNum = 0;
-@@ -539,7 +550,7 @@ BootMenuSelectItem (
+@@ -539,7 +554,7 @@ BootMenuSelectItem (
    //
    FirstItem = BootMenuData->ScrollBarControl.FirstItem;
    if ((WantSelectItem != BootMenuData->SelectItem) && !RePaintItems) {
@@ -71,7 +75,7 @@ index ef19319614..72b399bfa0 100644
      String   = HiiGetString (gStringPackHandle, BootMenuData->PtrTokens[BootMenuData->SelectItem], NULL);
      PrintCol = StartCol  + 1;
      PrintRow = StartRow + 3 + BootMenuData->SelectItem - FirstItem;
-@@ -550,7 +561,7 @@ BootMenuSelectItem (
+@@ -550,7 +565,7 @@ BootMenuSelectItem (
    //
    // Print want to select item
    //
@@ -80,7 +84,7 @@ index ef19319614..72b399bfa0 100644
    String   = HiiGetString (gStringPackHandle, BootMenuData->PtrTokens[WantSelectItem], NULL);
    PrintCol = StartCol  + 1;
    PrintRow = StartRow + TITLE_TOKEN_COUNT + 2 + WantSelectItem - FirstItem;
-@@ -589,7 +600,7 @@ DrawBootPopupMenu (
+@@ -589,7 +604,7 @@ DrawBootPopupMenu (
    gST->ConOut->ClearScreen (gST->ConOut);
  
    SavedAttribute = gST->ConOut->Mode->Attribute;
@@ -89,7 +93,7 @@ index ef19319614..72b399bfa0 100644
    Width              = BootMenuData->MenuScreen.Width;
    StartCol           = BootMenuData->MenuScreen.StartCol;
    StartRow           = BootMenuData->MenuScreen.StartRow;
-@@ -754,6 +765,16 @@ BootFromSelectOption (
+@@ -754,6 +769,16 @@ BootFromSelectOption (
        break;
      }
    }
@@ -106,11 +110,24 @@ index ef19319614..72b399bfa0 100644
  }
  
  /**
+@@ -1114,6 +1139,12 @@ BootManagerMenuEntry (
+     gBS->WaitForEvent (1, &gST->ConIn->WaitForKey, &Index);
+     Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
+     if (!EFI_ERROR (Status)) {
++#if defined (T733_VENDOR_POWER_KEY)
++      if ((Key.UnicodeChar == CHAR_NULL) && (Key.ScanCode == 0x80)) {
++        Key.UnicodeChar = CHAR_CARRIAGE_RETURN;
++      }
++#endif
++
+       switch (Key.UnicodeChar) {
+         case CHAR_NULL:
+           switch (Key.ScanCode) {
 diff --git a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h
-index 876237df18..2aa50e256e 100644
+index 697a44a..8b45ad1 100644
 --- a/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h
 +++ b/MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenu.h
-@@ -23,7 +23,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+@@ -22,7 +22,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
  #include <Protocol/BootLogo.h>
  
  #define TITLE_TOKEN_COUNT  1
