@@ -20,7 +20,8 @@ Dwc3PushMessage (
   UINT32 Next = (Dev->MessageTail + 1) % DWC3_MESSAGE_QUEUE_DEPTH;
 
   if (Next == Dev->MessageHead) {
-    DEBUG ((EFI_D_ERROR, "DWC3: Message Queue Overflow, dropping Message %u!\n", Message));
+    DEBUG ((EFI_D_ERROR, "DWC3: Message queue exhausted at message %u\n", Message));
+    Dev->Faulted = TRUE;
     return;
   }
 
@@ -33,6 +34,32 @@ Dwc3PushMessage (
   }
 
   Dev->MessageTail = Next;
+}
+
+VOID
+Dwc3DiscardEndpointMessages (
+  IN DWC3_DEV *Dev,
+  IN UINT8     PhysEpNum)
+{
+  UINT32 Read = Dev->MessageHead;
+  UINT32 Write = Read;
+  DWC3_MESSAGE *Entry;
+  BOOLEAN Transfer;
+
+  while (Read != Dev->MessageTail) {
+    Entry = &Dev->Messages[Read];
+    Transfer = (BOOLEAN)(Entry->Message == EfiUsbMsgEndpointStatusChangedRx ||
+                         Entry->Message == EfiUsbMsgEndpointStatusChangedTx);
+    if (!Transfer || DWC3_PHYS_EP (Entry->Payload.utr.EndpointIndex,
+                                   Entry->Payload.utr.Direction) != PhysEpNum) {
+      CopyMem (&Dev->Messages[Write], Entry, sizeof (*Entry));
+      Write = (Write + 1) % DWC3_MESSAGE_QUEUE_DEPTH;
+    }
+
+    Read = (Read + 1) % DWC3_MESSAGE_QUEUE_DEPTH;
+  }
+
+  Dev->MessageTail = Write;
 }
 
 BOOLEAN
@@ -89,6 +116,16 @@ Dwc3SendEpCommand (
   UINT32 Timeout;
   UINT32 CommandStatus;
 
+  if (Dev->Faulted) {
+    return EFI_DEVICE_ERROR;
+  }
+
+  Register = MmioRead32 (Dev->Base + DepBase + DWC3_DEPCMD);
+  if ((Register & DWC3_DEPCMD_CMDACT) != 0) {
+    Dev->Faulted = TRUE;
+    return EFI_NOT_READY;
+  }
+
   MmioWrite32 (Dev->Base + DepBase + DWC3_DEPCMDPAR0, Param0);
   MmioWrite32 (Dev->Base + DepBase + DWC3_DEPCMDPAR1, Param1);
   MmioWrite32 (Dev->Base + DepBase + DWC3_DEPCMDPAR2, Param2);
@@ -107,6 +144,7 @@ Dwc3SendEpCommand (
 
       if (CommandStatus != 0) {
         DEBUG ((EFI_D_ERROR, "DWC3: Endpoint Command 0x%x on Physical EP %u failed with Status %u!\n", DWC3_DEPCMD_CMD (Command), PhysEpNum, CommandStatus));
+        Dev->Faulted = TRUE;
         return EFI_DEVICE_ERROR;
       }
 
@@ -117,6 +155,8 @@ Dwc3SendEpCommand (
   }
 
   DEBUG ((EFI_D_ERROR, "DWC3: Endpoint Command 0x%x on Physical EP %u timed out!\n", DWC3_DEPCMD_CMD (Command), PhysEpNum));
+
+  Dev->Faulted = TRUE;
 
   return EFI_TIMEOUT;
 }
@@ -196,7 +236,7 @@ Dwc3EnableEndpoint (
   if (EpType == DWC3_DEPCMD_TYPE_CONTROL) {
     Param1 |= DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_XFER_NOT_READY_EN;
   } else {
-    Param1 |= DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_XFER_IN_PROGRESS_EN;
+    Param1 |= DWC3_DEPCFG_XFER_COMPLETE_EN;
   }
 
   Status = Dwc3SendEpCommand (Dev, PhysEpNum, DWC3_DEPCMD_SETEPCONFIG, Param0, Param1, 0, NULL);
@@ -240,7 +280,9 @@ Dwc3DisableEndpoint (
     return;
   }
 
-  Dwc3EndTransfer (Dev, PhysEpNum);
+  if (EFI_ERROR (Dwc3EndTransfer (Dev, PhysEpNum))) {
+    return;
+  }
 
   Register  = MmioRead32 (Dev->Base + DWC3_DALEPENA);
   Register &= ~DWC3_DALEPENA_EP (PhysEpNum);
@@ -265,7 +307,6 @@ Dwc3StartTransfer (
   EFI_STATUS     Status   = EFI_DEVICE_ERROR;
   UINT32         CommandRegister;
   BOOLEAN        NeedZlp;
-  UINT32         Attempt;
 
   NeedZlp = (BOOLEAN)(Endpoint->ZeroLengthTermination &&
                       (PhysEpNum & 1) != 0 &&
@@ -291,43 +332,18 @@ Dwc3StartTransfer (
     Trb->Control |= DWC3_TRB_CTRL_IOC | DWC3_TRB_CTRL_LST;
   }
 
-  for (Attempt = 0; Attempt < DWC3_START_XFER_ATTEMPTS; Attempt++) {
-    if (Attempt != 0) {
-      gBS->Stall (200);
-
-      Dwc3EndTransfer (Dev, PhysEpNum);
-
-      Trb->BufferPtrLow  = (UINT32)(BufferPhys & 0xFFFFFFFF);
-      Trb->BufferPtrHigh = (UINT32)(BufferPhys >> 32);
-      Trb->Size          = DWC3_TRB_SIZE_LENGTH (Length);
-      Trb->Control       = TrbType | DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_ISP_IMI;
-
-      if (NeedZlp) {
-        Trb->Control |= DWC3_TRB_CTRL_CHN;
-
-        Zlp->BufferPtrLow  = (UINT32)(BufferPhys & 0xFFFFFFFF);
-        Zlp->BufferPtrHigh = (UINT32)(BufferPhys >> 32);
-        Zlp->Size          = 0;
-        Zlp->Control       = TrbType | DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_ISP_IMI |
-                             DWC3_TRB_CTRL_IOC | DWC3_TRB_CTRL_LST;
-      } else {
-        Trb->Control |= DWC3_TRB_CTRL_IOC | DWC3_TRB_CTRL_LST;
-      }
-    }
-
-    Status = Dwc3SendEpCommand (Dev, PhysEpNum, DWC3_DEPCMD_STARTTRANSFER,
-                                (UINT32)(Endpoint->TrbPoolPhys >> 32),
-                                (UINT32)(Endpoint->TrbPoolPhys & 0xFFFFFFFF),
-                                0, &CommandRegister);
-    if (!EFI_ERROR (Status)) {
-      break;
-    }
-  }
+  MemoryFence ();
+  Status = Dwc3SendEpCommand (Dev, PhysEpNum, DWC3_DEPCMD_STARTTRANSFER,
+                              (UINT32)(Endpoint->TrbPoolPhys >> 32),
+                              (UINT32)(Endpoint->TrbPoolPhys & 0xFFFFFFFF),
+                              0, &CommandRegister);
 
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "DWC3: STARTTRANSFER failed on Physical EP %u, TrbType 0x%x Len %u RscIdx %u Ep0State %u\n",
             PhysEpNum, TrbType, Length, Endpoint->ResourceIndex, Dev->Ep0State));
-    Trb->Control = 0;
+    if (!Dev->Faulted) {
+      Trb->Control = 0;
+    }
     return Status;
   }
 
@@ -337,30 +353,141 @@ Dwc3StartTransfer (
   return EFI_SUCCESS;
 }
 
-VOID
+STATIC
+EFI_STATUS
+Dwc3ReadHardwareEvent (IN DWC3_DEV *Dev, OUT UINT32 *Event)
+{
+  UINT32 Count;
+
+  Count = MmioRead32 (Dev->Base + DWC3_GEVNTCOUNT (0)) & DWC3_GEVNTCOUNT_MASK;
+  if (Count == 0) {
+    return EFI_NOT_READY;
+  }
+
+  if (Count > DWC3_EVENT_BUFFER_SIZE || (Count & 3) != 0) {
+    Dev->Faulted = TRUE;
+    return EFI_DEVICE_ERROR;
+  }
+
+  MemoryFence ();
+  CopyMem (Event, Dev->EventBuffer + Dev->EventPos, sizeof (*Event));
+  Dev->EventPos = (Dev->EventPos + sizeof (*Event)) % DWC3_EVENT_BUFFER_SIZE;
+  MmioWrite32 (Dev->Base + DWC3_GEVNTCOUNT (0), sizeof (*Event));
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+Dwc3WaitEndTransfer (IN DWC3_DEV *Dev, IN UINT8 PhysEpNum)
+{
+  UINT32 Event;
+  UINT32 Timeout;
+  UINT32 Slot;
+  UINT32 Capacity = ARRAY_SIZE (Dev->DeferredEvents);
+  EFI_STATUS Status;
+
+  // END completion retires the resource. Other endpoints and bus events
+  // stay ordered in the software queue until normal dispatch resumes.
+  for (Timeout = 0; Timeout < DWC3_CMD_TIMEOUT_US; Timeout++) {
+    Status = Dwc3ReadHardwareEvent (Dev, &Event);
+    if (Status == EFI_NOT_READY) {
+      gBS->Stall (1);
+      continue;
+    }
+
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+
+    if (DWC3_EVENT_IS_ENDPOINT (Event) && DWC3_DEPEVT_EPNUMBER (Event) == PhysEpNum) {
+      if (DWC3_DEPEVT_TYPE (Event) == DWC3_DEPEVT_EPCMDCMPLT &&
+          ((DWC3_DEPEVT_PARAMETERS (Event) >> 8) & 0xF) == DWC3_DEPCMD_ENDTRANSFER) {
+        if (DWC3_DEPEVT_STATUS (Event) != 0) {
+          DEBUG ((EFI_D_ERROR, "DWC3: END completion failed EP %u event=%08x\n", PhysEpNum, Event));
+          Dev->Faulted = TRUE;
+          return EFI_DEVICE_ERROR;
+        }
+
+        return EFI_SUCCESS;
+      }
+
+      // Completions preceding END belong to the cancelled request.
+      continue;
+    }
+
+    if (Dev->DeferredEventCount == Capacity) {
+      Dev->Faulted = TRUE;
+      return EFI_OUT_OF_RESOURCES;
+    }
+
+    Slot = (Dev->DeferredEventHead + Dev->DeferredEventCount) % Capacity;
+    Dev->DeferredEvents[Slot] = Event;
+    Dev->DeferredEventCount++;
+  }
+
+  DEBUG ((EFI_D_ERROR, "DWC3: END event timeout EP %u DEPCMD=%08x DSTS=%08x pending=%u\n",
+          PhysEpNum, MmioRead32 (Dev->Base + DWC3_DEP_BASE (PhysEpNum) + DWC3_DEPCMD),
+          MmioRead32 (Dev->Base + DWC3_DSTS), Dev->DeferredEventCount));
+  Dev->Faulted = TRUE;
+  return EFI_TIMEOUT;
+}
+
+EFI_STATUS
 Dwc3EndTransfer (
   IN DWC3_DEV *Dev,
   IN UINT8     PhysEpNum)
 {
   DWC3_ENDPOINT *Endpoint = &Dev->Endpoints[PhysEpNum];
   UINT32         Command;
+  EFI_STATUS     Status;
+  UINT32         Index;
+  UINT32         Event;
+  UINT32         Retained;
+  UINT32         Capacity = ARRAY_SIZE (Dev->DeferredEvents);
+
+  if (Dev->Faulted) {
+    return EFI_DEVICE_ERROR;
+  }
 
   if (Endpoint->ResourceIndex == 0) {
     Endpoint->TransferStarted = FALSE;
-    return;
+    return EFI_SUCCESS;
   }
 
   Command = DWC3_DEPCMD_ENDTRANSFER | DWC3_DEPCMD_HIPRI_FORCERM | DWC3_DEPCMD_CMDIOC;
   Command |= DWC3_DEPCMD_PARAM (Endpoint->ResourceIndex);
 
-  Dwc3SendEpCommand (Dev, PhysEpNum, Command, 0, 0, 0, NULL);
+  Status = Dwc3SendEpCommand (Dev, PhysEpNum, Command, 0, 0, 0, NULL);
+  if (EFI_ERROR (Status)) {
+    Dev->Faulted = TRUE;
+    return Status;
+  }
 
-  gBS->Stall (100);
+  Status = Dwc3WaitEndTransfer (Dev, PhysEpNum);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Retained = 0;
+  for (Index = 0; Index < Dev->DeferredEventCount; Index++) {
+    Event = Dev->DeferredEvents[(Dev->DeferredEventHead + Index) % Capacity];
+    if (DWC3_EVENT_IS_ENDPOINT (Event) && DWC3_DEPEVT_EPNUMBER (Event) == PhysEpNum) {
+      continue;
+    }
+
+    Dev->DeferredEvents[(Dev->DeferredEventHead + Retained) % Capacity] = Event;
+    Retained++;
+  }
+
+  Dev->DeferredEventCount = Retained;
+  MemoryFence ();
 
   Endpoint->ResourceIndex      = 0;
   Endpoint->TransferStarted    = FALSE;
   Endpoint->TrbPool[0].Control = 0;
   Endpoint->TrbPool[1].Control = 0;
+
+  return EFI_SUCCESS;
 }
 
 EFI_STATUS
@@ -390,11 +517,16 @@ Dwc3Ep0OutStart (IN DWC3_DEV *Dev)
 {
   Dev->Ep0State         = Dwc3Ep0StateSetup;
   Dev->Ep0StatusStarted = FALSE;
+  Dev->Ep0StatusReady   = FALSE;
+  Dev->Ep0StatusRequested = FALSE;
+  Dev->Ep0InternalRequest = FALSE;
   Dev->Ep0Bounced       = FALSE;
 
-  Dwc3EndTransfer (Dev, DWC3_EP0_IN);
-  Dwc3EndTransfer (Dev, DWC3_EP0_OUT);
-  Dwc3StartTransfer (Dev, DWC3_EP0_OUT, Dev->Ep0BufferPhys, 8, DWC3_TRBCTL_CONTROL_SETUP);
+  if (EFI_ERROR (Dwc3EndTransfer (Dev, DWC3_EP0_IN)) ||
+      EFI_ERROR (Dwc3EndTransfer (Dev, DWC3_EP0_OUT)) ||
+      EFI_ERROR (Dwc3StartTransfer (Dev, DWC3_EP0_OUT, Dev->Ep0BufferPhys, 8, DWC3_TRBCTL_CONTROL_SETUP))) {
+    Dev->Faulted = TRUE;
+  }
 }
 
 VOID
@@ -402,6 +534,8 @@ Dwc3Ep0ResetState (IN DWC3_DEV *Dev)
 {
   Dev->Ep0State         = Dwc3Ep0StateSetup;
   Dev->Ep0StatusStarted = FALSE;
+  Dev->Ep0StatusReady   = FALSE;
+  Dev->Ep0StatusRequested = FALSE;
   Dev->Ep0Bounced       = FALSE;
 
   Dwc3EndTransfer (Dev, DWC3_EP0_IN);
@@ -433,12 +567,17 @@ Dwc3ResetNonControlEndpoints (IN DWC3_DEV *Dev)
     }
 
     if (Endpoint->TransferStarted) {
-      Dwc3EndTransfer (Dev, Index);
+      if (EFI_ERROR (Dwc3EndTransfer (Dev, Index))) {
+        return;
+      }
       Dwc3PushTransferResult (Dev, Index, 0, UsbTransferStatusAborted);
       Endpoint->TransferBuffer = NULL;
     }
 
-    Dwc3EnableEndpoint (Dev, Index, Endpoint->EpType, Endpoint->MaxPacketSize, FALSE);
+    if (EFI_ERROR (Dwc3EnableEndpoint (Dev, Index, Endpoint->EpType, Endpoint->MaxPacketSize, FALSE))) {
+      Dev->Faulted = TRUE;
+      return;
+    }
   }
 }
 
@@ -489,10 +628,12 @@ Dwc3Ep0HandleSetup (IN DWC3_DEV *Dev)
 
   if (Dwc3Ep0HandleStandardRequest (Dev)) {
     Dev->Ep0State = Dwc3Ep0StateStatus;
+    Dev->Ep0InternalRequest = TRUE;
     return;
   }
 
   Dev->Ep0State = Dev->ThreeStageSetup ? Dwc3Ep0StateData : Dwc3Ep0StateStatus;
+  Dev->Ep0InternalRequest = FALSE;
 
   ZeroMem (&Payload, sizeof (Payload));
   CopyMem (&Payload.udr, &Dev->SetupPacket, sizeof (EFI_USB_DEVICE_REQUEST));
@@ -516,11 +657,39 @@ Dwc3Ep0StartStatus (
     return;
   }
 
+  Dev->Ep0StatusReady = TRUE;
+  Dev->Ep0StatusEndpoint = PhysEpNum;
+  if (!Dev->Ep0StatusRequested && !Dev->Ep0InternalRequest) {
+    return;
+  }
+
   Dev->Ep0State         = Dwc3Ep0StateStatus;
   Dev->Ep0StatusStarted = TRUE;
 
-  Dwc3EndTransfer (Dev, PhysEpNum);
-  Dwc3StartTransfer (Dev, PhysEpNum, Dev->Ep0BufferPhys, 0, TrbType);
+  if (EFI_ERROR (Dwc3EndTransfer (Dev, PhysEpNum)) ||
+      EFI_ERROR (Dwc3StartTransfer (Dev, PhysEpNum, Dev->Ep0BufferPhys, 0, TrbType))) {
+    Dev->Faulted = TRUE;
+  }
+}
+
+EFI_STATUS
+Dwc3Ep0SubmitStatus (IN DWC3_DEV *Dev, IN UINT8 PhysEpNum, IN VOID *Buffer)
+{
+  UINT8 Expected = (Dev->ThreeStageSetup && Dev->Ep0ExpectIn) ? DWC3_EP0_OUT : DWC3_EP0_IN;
+
+  if (Dev->Ep0State != Dwc3Ep0StateStatus || PhysEpNum != Expected ||
+      Dev->Ep0StatusRequested) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Dev->Endpoints[PhysEpNum].TransferBuffer = Buffer;
+  Dev->Endpoints[PhysEpNum].TransferTrbLength = 0;
+  Dev->Ep0StatusRequested = TRUE;
+  if (Dev->Ep0StatusReady) {
+    Dwc3Ep0StartStatus (Dev, PhysEpNum);
+  }
+
+  return Dev->Faulted ? EFI_DEVICE_ERROR : EFI_SUCCESS;
 }
 
 STATIC
@@ -549,7 +718,18 @@ Dwc3HandleEp0Event (
 
   switch (EventType) {
     case DWC3_DEPEVT_XFERCOMPLETE:
+      if (!Endpoint->TransferStarted) {
+        break;
+      }
+
+      MemoryFence ();
+      if ((Endpoint->TrbPool[0].Control & DWC3_TRB_CTRL_HWO) != 0) {
+        Dev->Faulted = TRUE;
+        break;
+      }
+
       Endpoint->TransferStarted = FALSE;
+      Endpoint->ResourceIndex = 0;
 
       switch (Dev->Ep0State) {
         case Dwc3Ep0StateSetup:
@@ -573,9 +753,15 @@ Dwc3HandleEp0Event (
 
           Dwc3PushTransferResult (Dev, PhysEpNum, Transferred, UsbTransferStatusComplete);
           Endpoint->TransferBuffer = NULL;
+          Dev->Ep0State = Dwc3Ep0StateStatus;
           break;
 
         case Dwc3Ep0StateStatus:
+          if (!Dev->Ep0InternalRequest) {
+            Dwc3PushTransferResult (Dev, PhysEpNum, 0, UsbTransferStatusComplete);
+            Endpoint->TransferBuffer = NULL;
+          }
+
           Dwc3Ep0OutStart (Dev);
           break;
 
@@ -636,12 +822,12 @@ Dwc3HandleEpEvent (
 
   switch (EventType) {
     case DWC3_DEPEVT_XFERCOMPLETE:
-    case DWC3_DEPEVT_XFERINPROGRESS:
       if (!Endpoint->TransferStarted) {
         break;
       }
 
       if ((Endpoint->TrbPool[0].Control & DWC3_TRB_CTRL_HWO) != 0) {
+        Dev->Faulted = TRUE;
         break;
       }
 
@@ -683,17 +869,31 @@ Dwc3HandleDeviceEvent (
   UINT8                     Index;
   BOOLEAN                   Suspended;
   BOOLEAN                   Ep0Rearm;
+  BOOLEAN                   PreserveSetup;
+  EFI_STATUS                Status;
 
   ZeroMem (&Payload, sizeof (Payload));
 
   switch (EventType) {
     case DWC3_DEVICE_EVENT_DISCONNECT:
+      Dev->MessageHead = Dev->MessageTail = 0;
+      for (Index = 0; Index < Dev->NumPhysicalEps; Index++) {
+        if (EFI_ERROR (Dwc3EndTransfer (Dev, Index))) {
+          return;
+        }
+        Dev->Endpoints[Index].TransferBuffer = NULL;
+      }
+
+      Dwc3Ep0ResetState (Dev);
       Dev->Speed = UsbBusSpeedUnknown;
 
       Dwc3PushMessage (Dev, EfiUsbMsgBusEventDetach, NULL);
       break;
 
     case DWC3_DEVICE_EVENT_RESET:
+      Dev->MessageHead = Dev->MessageTail = 0;
+      PreserveSetup = (BOOLEAN)(Dev->Ep0State == Dwc3Ep0StateSetup &&
+                                Dev->Endpoints[DWC3_EP0_OUT].TransferStarted);
       Register  = MmioRead32 (Dev->Base + DWC3_DCTL);
       Register &= ~DWC3_DCTL_TSTCTRL_MASK;
       MmioWrite32 (Dev->Base + DWC3_DCTL, Register);
@@ -710,7 +910,9 @@ Dwc3HandleDeviceEvent (
 
       for (Index = DWC3_EP0_IN + 1; Index < Dev->NumPhysicalEps; Index++) {
         if (Dev->Endpoints[Index].Enabled) {
-          Dwc3EndTransfer (Dev, Index);
+          if (EFI_ERROR (Dwc3EndTransfer (Dev, Index))) {
+            return;
+          }
           Dev->Endpoints[Index].TransferBuffer = NULL;
         }
       }
@@ -718,7 +920,19 @@ Dwc3HandleDeviceEvent (
       Dev->LinkState = DWC3_LINK_STATE_HS_ON;
       Dev->Suspended = FALSE;
 
-      Dwc3Ep0ResetState (Dev);
+      /* A queued SETUP TRB remains owned by EP0 across bus reset. Control
+       * data or status requests must finish cancellation before rearming.
+       */
+      if (!PreserveSetup) {
+        if (EFI_ERROR (Dwc3EndTransfer (Dev, DWC3_EP0_IN)) ||
+            EFI_ERROR (Dwc3EndTransfer (Dev, DWC3_EP0_OUT))) {
+          return;
+        }
+
+        Dev->Endpoints[DWC3_EP0_IN].TransferBuffer = NULL;
+        Dev->Endpoints[DWC3_EP0_OUT].TransferBuffer = NULL;
+        Dwc3Ep0StallAndRestart (Dev);
+      }
 
       Dwc3PushMessage (Dev, EfiUsbMsgBusEventReset, NULL);
       break;
@@ -748,8 +962,17 @@ Dwc3HandleDeviceEvent (
 
       Ep0Rearm = (BOOLEAN)(!Dev->Endpoints[DWC3_EP0_OUT].TransferStarted);
 
-      Dwc3EnableEndpoint (Dev, DWC3_EP0_OUT, DWC3_DEPCMD_TYPE_CONTROL, Ep0MaxPacket, (BOOLEAN)!Ep0Rearm);
-      Dwc3EnableEndpoint (Dev, DWC3_EP0_IN, DWC3_DEPCMD_TYPE_CONTROL, Ep0MaxPacket, (BOOLEAN)!Ep0Rearm);
+      Status = Dwc3EnableEndpoint (Dev, DWC3_EP0_OUT, DWC3_DEPCMD_TYPE_CONTROL,
+                                  Ep0MaxPacket, Dev->Endpoints[DWC3_EP0_OUT].Enabled);
+      if (EFI_ERROR (Status)) {
+        return;
+      }
+
+      Status = Dwc3EnableEndpoint (Dev, DWC3_EP0_IN, DWC3_DEPCMD_TYPE_CONTROL,
+                                  Ep0MaxPacket, Dev->Endpoints[DWC3_EP0_IN].Enabled);
+      if (EFI_ERROR (Status)) {
+        return;
+      }
 
       BulkMaxPacket = (UINT16)((Dev->Speed >= UsbBusSpeedHigh) ? 512 : 64);
 
@@ -758,7 +981,10 @@ Dwc3HandleDeviceEvent (
           continue;
         }
 
-        Dwc3EnableEndpoint (Dev, Index, Dev->Endpoints[Index].EpType, BulkMaxPacket, FALSE);
+        Status = Dwc3EnableEndpoint (Dev, Index, Dev->Endpoints[Index].EpType, BulkMaxPacket, TRUE);
+        if (EFI_ERROR (Status)) {
+          return;
+        }
       }
 
       if (Ep0Rearm) {
@@ -798,6 +1024,7 @@ Dwc3HandleDeviceEvent (
 
     case DWC3_DEVICE_EVENT_OVERFLOW:
       DEBUG ((EFI_D_ERROR, "DWC3: Event Buffer Overflow!\n"));
+      Dev->Faulted = TRUE;
       break;
 
     default:
@@ -808,21 +1035,20 @@ Dwc3HandleDeviceEvent (
 EFI_STATUS
 Dwc3ProcessEvents (IN DWC3_DEV *Dev)
 {
-  UINT32 Count;
   UINT32 Event;
+  EFI_STATUS Status;
 
-  Count = MmioRead32 (Dev->Base + DWC3_GEVNTCOUNT (0)) & DWC3_GEVNTCOUNT_MASK;
-  if (Count == 0) {
-    return EFI_NOT_READY;
-  }
-
-  while (Count >= sizeof (UINT32)) {
-    CopyMem (&Event, Dev->EventBuffer + Dev->EventPos, sizeof (UINT32));
-
-    Dev->EventPos = (Dev->EventPos + sizeof (UINT32)) % DWC3_EVENT_BUFFER_SIZE;
-    Count        -= sizeof (UINT32);
-
-    MmioWrite32 (Dev->Base + DWC3_GEVNTCOUNT (0), sizeof (UINT32));
+  while (!Dev->Faulted) {
+    if (Dev->DeferredEventCount != 0) {
+      Event = Dev->DeferredEvents[Dev->DeferredEventHead];
+      Dev->DeferredEventHead = (Dev->DeferredEventHead + 1) % ARRAY_SIZE (Dev->DeferredEvents);
+      Dev->DeferredEventCount--;
+    } else {
+      Status = Dwc3ReadHardwareEvent (Dev, &Event);
+      if (EFI_ERROR (Status)) {
+        return Status;
+      }
+    }
 
     if (Dev->EventTraceBudget != 0) {
       Dev->EventTraceBudget--;

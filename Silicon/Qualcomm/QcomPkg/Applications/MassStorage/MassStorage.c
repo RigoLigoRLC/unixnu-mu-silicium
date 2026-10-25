@@ -75,12 +75,24 @@ MassStorageStart ()
   Status = mUsbMsdProtocol->StartDevice (mUsbMsdProtocol);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "%a: Failed to Start USB Device! Status = %r\n", __FUNCTION__, Status));
+    PrintUI ("USB start failed. [Volume Up] Return");
+    while (GetPressedKey (TRUE).ScanCode != SCAN_UP) {
+    }
+
     return;
   }
 
   while (TRUE) {
     // Handle USB Events
-    mUsbMsdProtocol->EventHandler (mUsbMsdProtocol);
+    Status = mUsbMsdProtocol->EventHandler (mUsbMsdProtocol);
+    if (EFI_ERROR (Status) && Status != EFI_NOT_READY) {
+      DEBUG ((EFI_D_ERROR, "%a: USB event processing failed: %r\n", __FUNCTION__, Status));
+      PrintUI ("USB transfer failed. [Volume Up] Return");
+      while (GetPressedKey (TRUE).ScanCode != SCAN_UP) {
+      }
+
+      break;
+    }
 
     // Get current Keypress
     EFI_INPUT_KEY Key = GetPressedKey (FALSE);

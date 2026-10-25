@@ -164,6 +164,8 @@ VOID
 Dwc3EventBufferSetup (IN DWC3_DEV *Dev)
 {
   Dev->EventPos = 0;
+  Dev->DeferredEventHead = 0;
+  Dev->DeferredEventCount = 0;
 
   MmioWrite32 (Dev->Base + DWC3_GEVNTADRLO (0), (UINT32)(Dev->EventBufferPhys & 0xFFFFFFFF));
   MmioWrite32 (Dev->Base + DWC3_GEVNTADRHI (0), (UINT32)(Dev->EventBufferPhys >> 32));
@@ -234,7 +236,7 @@ Dwc3CoreInit (IN DWC3_DEV *Dev)
       (Register & DWC3_GSNPSID_MASK) != DWC3_GSNPSID_USB31)
   {
     DEBUG ((EFI_D_ERROR, "DWC3: Bad Synopsys ID 0x%08x!\n", Register));
-    ASSERT (FALSE);
+    return EFI_DEVICE_ERROR;
   }
 
   Dev->IsUsb31 = (BOOLEAN)((Register & DWC3_GSNPSID_MASK) == DWC3_GSNPSID_USB31);
@@ -315,6 +317,8 @@ Dwc3CoreInit (IN DWC3_DEV *Dev)
     Dev->Endpoints[Index].Enabled         = FALSE;
     Dev->Endpoints[Index].Stalled         = FALSE;
     Dev->Endpoints[Index].TransferStarted = FALSE;
+    Dev->Endpoints[Index].ResourceIndex   = 0;
+    Dev->Endpoints[Index].TransferBuffer  = NULL;
     Dev->Endpoints[Index].PhysEpNum       = Index;
   }
 

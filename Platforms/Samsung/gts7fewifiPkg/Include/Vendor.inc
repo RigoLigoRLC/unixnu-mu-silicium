@@ -37,13 +37,7 @@ INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/IPCCDxe/IPCCDxe.inf
 INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/GLinkDxe/GLinkDxe.inf
 INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/SPIDxe/SPIDxe.inf
 INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/UsbPwrCtrlDxe/UsbPwrCtrlDxe.inf
-INF gts7fewifiPkg/Vendor/PatchedBinaries/UsbfnDwc3Dxe.inf
-INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.inf
-INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/XhciDxe/XhciDxe.inf
-INF gts7fewifiPkg/Vendor/PatchedBinaries/UsbMsdDxe.inf
 INF gts7fewifiPkg/Vendor/PatchedBinaries/UsbConfigDxe.inf
-INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/UsbInitDxe/UsbInitDxe.inf
-INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/UsbDeviceDxe/UsbDeviceDxe.inf
 INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf
 INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/TsensDxe/TsensDxe.inf
 INF gts7fewifiPkg/Vendor/QcomPkg/Drivers/LimitsDxe/LimitsDxe.inf

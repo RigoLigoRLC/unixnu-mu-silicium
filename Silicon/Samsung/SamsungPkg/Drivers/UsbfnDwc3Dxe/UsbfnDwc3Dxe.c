@@ -15,7 +15,7 @@
 #include "UsbfnDwc3Dxe.h"
 
 STATIC CHAR16 mManufacturerName[] = L"Mu-Silicium";
-STATIC CHAR16 mProductName[]      = L"Samsung Exynos Device";
+STATIC CHAR16 mProductName[]      = L"Samsung USB Device";
 STATIC CHAR16 mSerialNumber[]     = L"0123456789ABCDEF";
 
 STATIC
@@ -231,6 +231,10 @@ Dwc3ConfigureEnableEndpoints (
 
   Dwc3Ep0OutStart (Dev);
 
+  if (Dev->Faulted) {
+    return EFI_DEVICE_ERROR;
+  }
+
   Status = Dwc3RunStop (Dev, TRUE);
   if (EFI_ERROR (Status)) {
     return Status;
@@ -351,6 +355,7 @@ Dwc3AbortTransfer (
   DWC3_DEV  *Dev;
   EFI_STATUS Status;
   UINT8      PhysEpNum;
+  UINT32     Events;
 
   if (This == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -367,9 +372,30 @@ Dwc3AbortTransfer (
     return EFI_INVALID_PARAMETER;
   }
 
-  Dwc3EndTransfer (Dev, PhysEpNum);
+  Status = Dwc3EndTransfer (Dev, PhysEpNum);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
   Dev->Endpoints[PhysEpNum].TransferBuffer = NULL;
+
+  // END has completed. Consume queued hardware events while this endpoint
+  // has no request, then remove its already queued protocol completions.
+  Events = DWC3_EVENT_BUFFER_SIZE / sizeof (UINT32);
+  while (Events-- != 0 &&
+         (Dev->DeferredEventCount != 0 ||
+          (MmioRead32 (Dev->Base + DWC3_GEVNTCOUNT (0)) & DWC3_GEVNTCOUNT_MASK) != 0)) {
+    Status = Dwc3ProcessEvents (Dev);
+    if (EFI_ERROR (Status) && Status != EFI_NOT_READY) {
+      return Status;
+    }
+  }
+
+  Dwc3DiscardEndpointMessages (Dev, PhysEpNum);
+  if (Dev->Faulted || Dev->DeferredEventCount != 0 ||
+      (MmioRead32 (Dev->Base + DWC3_GEVNTCOUNT (0)) & DWC3_GEVNTCOUNT_MASK) != 0) {
+    return EFI_DEVICE_ERROR;
+  }
 
   return EFI_SUCCESS;
 }
@@ -454,6 +480,7 @@ Dwc3EventHandler (
 {
   DWC3_DEV     *Dev;
   DWC3_MESSAGE  Pending;
+  EFI_STATUS    Status;
 
   if (This == NULL || Message == NULL || PayloadSize == NULL || Payload == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -472,6 +499,16 @@ Dwc3EventHandler (
 
   if (Dev->MessageHead == Dev->MessageTail) {
     Dwc3ProcessEvents (Dev);
+  }
+
+  if (Dev->Faulted) {
+    Status = Dwc3RunStop (Dev, FALSE);
+    if (!EFI_ERROR (Status)) {
+      Dwc3CoreExit (Dev);
+      Dev->Started = FALSE;
+    }
+
+    return EFI_DEVICE_ERROR;
   }
 
   if (!Dwc3PopMessage (Dev, &Pending)) {
@@ -516,6 +553,10 @@ Dwc3Transfer (
 
   Dev = DWC3_DEV_FROM_PROTOCOL (This);
 
+  if (!Dev->Started || Dev->Faulted) {
+    return EFI_NOT_READY;
+  }
+
   Status = Dwc3ValidateEndpoint (Dev, EndpointIndex, Direction, &PhysEpNum);
   if (EFI_ERROR (Status)) {
     return Status;
@@ -540,9 +581,11 @@ Dwc3Transfer (
   TrbLength = (UINT32)*BufferSize;
   DmaBuffer = Buffer;
 
-  Dev->Ep0Bounced = FALSE;
-
   if (PhysEpNum <= DWC3_EP0_IN) {
+    if (*BufferSize == 0 && Dev->Ep0State == Dwc3Ep0StateStatus) {
+      return Dwc3Ep0SubmitStatus (Dev, PhysEpNum, Buffer);
+    }
+
     if (Dev->Ep0State != Dwc3Ep0StateData) {
       return EFI_NOT_READY;
     }
@@ -551,7 +594,12 @@ Dwc3Transfer (
       return EFI_INVALID_PARAMETER;
     }
 
-    Dwc3EndTransfer (Dev, PhysEpNum);
+    Status = Dwc3EndTransfer (Dev, PhysEpNum);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+
+    Dev->Ep0Bounced = FALSE;
 
     if (TrbLength > Dev->SetupPacket.Length) {
       TrbLength   = Dev->SetupPacket.Length;
@@ -599,8 +647,10 @@ Dwc3Transfer (
                               (UINT64)(UINTN)DmaBuffer,
                               TrbLength, TrbType);
   if (EFI_ERROR (Status)) {
-    Endpoint->TransferBuffer = NULL;
-    Dev->Ep0Bounced          = FALSE;
+    if (!Dev->Faulted) {
+      Endpoint->TransferBuffer = NULL;
+      Dev->Ep0Bounced = FALSE;
+    }
     return Status;
   }
 
@@ -680,6 +730,18 @@ Dwc3FreeTransferBuffer (
 
   Dev = DWC3_DEV_FROM_PROTOCOL (This);
 
+  if (Dev->Started) {
+    if (Dev->Faulted) {
+      return EFI_NOT_READY;
+    }
+
+    for (Index = 0; Index < Dev->NumPhysicalEps; Index++) {
+      if (Dev->Endpoints[Index].TransferBuffer == Buffer) {
+        return EFI_NOT_READY;
+      }
+    }
+  }
+
   for (Index = 0; Index < DWC3_MAX_TRANSFER_BUFFERS; Index++) {
     if (Dev->TransferBuffers[Index].Buffer == Buffer) {
       FreeAlignedPages (Buffer, Dev->TransferBuffers[Index].Pages);
@@ -709,12 +771,20 @@ Dwc3StartController (IN EFI_USBFN_IO_PROTOCOL *This)
   Dev = DWC3_DEV_FROM_PROTOCOL (This);
 
   if (Dev->Started) {
-    return EFI_SUCCESS;
+    return Dev->Faulted ? EFI_DEVICE_ERROR : EFI_SUCCESS;
   }
+
+  Dev->Faulted = FALSE;
 
   Status = UsbfnPlatformPhyInit ();
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "DWC3: Failed to initialise the USB PHY! Status = %r\n", Status));
+    return Status;
+  }
+
+  Status = UsbfnPlatformGetData (&Dev->Platform);
+  if (EFI_ERROR (Status)) {
+    UsbfnPlatformPhyExit ();
     return Status;
   }
 
@@ -739,6 +809,7 @@ Dwc3StopController (IN EFI_USBFN_IO_PROTOCOL *This)
 {
   DWC3_DEV *Dev;
   UINT8     Index;
+  EFI_STATUS Status;
 
   if (This == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -750,10 +821,17 @@ Dwc3StopController (IN EFI_USBFN_IO_PROTOCOL *This)
     return EFI_SUCCESS;
   }
 
-  Dwc3RunStop (Dev, FALSE);
+  Status = Dwc3RunStop (Dev, FALSE);
+  if (EFI_ERROR (Status)) {
+    Dev->Faulted = TRUE;
+    return Status;
+  }
 
   for (Index = 0; Index < Dev->NumPhysicalEps; Index++) {
-    Dwc3DisableEndpoint (Dev, Index);
+    Dev->Endpoints[Index].TransferStarted = FALSE;
+    Dev->Endpoints[Index].ResourceIndex = 0;
+    Dev->Endpoints[Index].TransferBuffer = NULL;
+    Dev->Endpoints[Index].Enabled = FALSE;
   }
 
   Dwc3CoreExit (Dev);
@@ -987,6 +1065,16 @@ InitUsbfnDwc3Driver (
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "Failed to install USB Function IO Protocol! Status = %r\n", Status));
     goto Failure;
+  }
+
+  // Firmware prepares power and PHY for direct XNU boot. MSC starts endpoint
+  // transfers only when its application calls StartController and configures it.
+  Status = UsbfnPlatformPhyInit ();
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "DWC3: USB handoff PHY initialization failed: %r\n", Status));
+  } else {
+    Status = UsbfnPlatformGetData (&Dev->Platform);
+    DEBUG ((DEBUG_INFO, "DWC3: source USBFN installed; halted device ready for XNU: %r\n", Status));
   }
 
   return EFI_SUCCESS;

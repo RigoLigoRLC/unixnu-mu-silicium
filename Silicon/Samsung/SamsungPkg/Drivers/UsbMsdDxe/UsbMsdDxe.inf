@@ -1,0 +1,28 @@
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = UsbMsdDxe
+  FILE_GUID = 8B40D045-5449-4271-9B91-D6DD69DA58E0
+  MODULE_TYPE = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT = UsbMsdEntryPoint
+
+[Sources]
+  UsbMsdDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  QcomPkg/QcomPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Protocols]
+  gEfiUsbFunctionIoProtocolGuid
+  gEfiUsbMsdProtocolGuid
+
+[Depex]
+  gEfiUsbFunctionIoProtocolGuid

@@ -46,6 +46,11 @@ EFI_DEVICE_PATH_PROTOCOL**
 EFIAPI
 DeviceBootManagerOnDemandConInConnect ()
 {
+#if defined (T733_USERDATA_PAYLOAD)
+  // The T733 DSC defines this macro for both payload configurations. Its
+  // source USBFN driver prepares USB0 without the vendor DriverBinding path.
+  return NULL;
+#else
   EFI_STATUS Status;
   EFI_EVENT  InitEvent;
 
@@ -61,6 +66,7 @@ DeviceBootManagerOnDemandConInConnect ()
   gBS->CloseEvent  (InitEvent);
 
   return NULL;
+#endif
 }
 
 VOID

@@ -29,10 +29,7 @@ export EDK_TOOLS_BIN="$EDK_TOOLS_PATH/Source/C/bin"
 export PACKAGES_PATH="$uefi_root/Platforms/Samsung:$uefi_root/Common/Mu:$uefi_root/Common/Mu_OEM_Sample:$uefi_root/Mu_Basecore:$uefi_root/Silicon/Qualcomm:$uefi_root/Silicon/Samsung:$uefi_root/Silicon/Silicium:$uefi_root/Silicium-ACPI:$unixnu_tree/package:$unixnu_tree/drivers/DarwinBoot"
 export PATH="$EDK_TOOLS_BIN:$EDK_TOOLS_PATH/BinWrappers/PosixLike:$PATH"
 
-"$python_command" Resources/Scripts/patch_gts7fewifi_usb_msd.py \
-    --clang "$clang_command" --objcopy "$objcopy_command"
-"$python_command" Resources/Scripts/patch_gts7fewifi_usb_dwc.py \
-    --clang "$clang_command" --objcopy "$objcopy_command"
+"$python_command" Resources/Scripts/patch_gts7fewifi_usb_config.py
 
 make -C "$EDK_TOOLS_PATH/Source/C" -j8
 mkdir -p Conf

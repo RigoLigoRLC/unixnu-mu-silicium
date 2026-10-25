@@ -11,6 +11,9 @@ INF EmbeddedPkg/MetronomeDxe/MetronomeDxe.inf
 
 !include gts7fewifiPkg/Include/Vendor.inc
 
+INF SamsungPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
+INF SamsungPkg/Drivers/UsbMsdDxe/UsbMsdDxe.inf
+
 INF SiliciumPkg/Drivers/RamManagerDxe/RamManagerDxe.inf
 INF MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystemRuntimeDxe.inf
 INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf

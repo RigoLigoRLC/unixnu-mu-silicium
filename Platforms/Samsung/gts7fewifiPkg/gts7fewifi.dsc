@@ -40,6 +40,7 @@
   gQcomPkgTokenSpaceGuid.PcdStorageIsUfs3|FALSE
 
 [LibraryClasses]
+  PlatformUsbfnLib|gts7fewifiPkg/Library/Sm7325PlatformUsbfnLib/Sm7325PlatformUsbfnLib.inf
   PlatformSecLib|gts7fewifiPkg/Library/PlatformSecLib/PlatformSecLib.inf
   MemoryMapLib|gts7fewifiPkg/Library/MemoryMapLib/MemoryMapLib.inf
   ConfigurationMapLib|gts7fewifiPkg/Library/ConfigurationMapLib/ConfigurationMapLib.inf
@@ -47,6 +48,8 @@
   FileExplorerLib|MdeModulePkg/Library/FileExplorerLib/FileExplorerLib.inf
 
 [Components]
+  SamsungPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
+  SamsungPkg/Drivers/UsbMsdDxe/UsbMsdDxe.inf
   MdeModulePkg/Universal/Disk/RamDiskDxe/RamDiskDxe.inf
   gts7fewifiPkg/Drivers/RecoveryPayloadDxe/RecoveryPayloadDxe.inf
   UniXNUPkg/Application/UniXNU/UniXNU.inf

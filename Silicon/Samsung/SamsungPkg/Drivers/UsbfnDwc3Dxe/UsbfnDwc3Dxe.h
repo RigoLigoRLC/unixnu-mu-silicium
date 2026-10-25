@@ -93,6 +93,7 @@ typedef struct {
   UINT8                        NumPhysicalEps;
 
   BOOLEAN                      Started;
+  BOOLEAN                      Faulted;
   BOOLEAN                      Suspended;
   UINT8                        LinkState;
   EFI_USB_BUS_SPEED            Speed;
@@ -100,6 +101,9 @@ typedef struct {
   UINT8                       *EventBuffer;
   EFI_PHYSICAL_ADDRESS         EventBufferPhys;
   UINT32                       EventPos;
+  UINT32                       DeferredEvents[DWC3_EVENT_BUFFER_SIZE / sizeof (UINT32)];
+  UINT32                       DeferredEventHead;
+  UINT32                       DeferredEventCount;
   UINT32                       EventTraceBudget;
 
   UINT8                       *Ep0Buffer;
@@ -110,6 +114,10 @@ typedef struct {
 
   BOOLEAN                      Ep0ExpectIn;
   BOOLEAN                      Ep0StatusStarted;
+  BOOLEAN                      Ep0StatusReady;
+  BOOLEAN                      Ep0StatusRequested;
+  BOOLEAN                      Ep0InternalRequest;
+  UINT8                        Ep0StatusEndpoint;
   EFI_USB_DEVICE_REQUEST       SetupPacket;
   BOOLEAN                      Ep0Bounced;
   VOID                        *Ep0BounceTarget;
@@ -188,8 +196,14 @@ Dwc3StartTransfer (
   IN UINT32    TrbType
   );
 
-VOID
+EFI_STATUS
 Dwc3EndTransfer (
+  IN DWC3_DEV *Dev,
+  IN UINT8     PhysEpNum
+  );
+
+VOID
+Dwc3DiscardEndpointMessages (
   IN DWC3_DEV *Dev,
   IN UINT8     PhysEpNum
   );
@@ -209,6 +223,9 @@ Dwc3Ep0ResetState (IN DWC3_DEV *Dev);
 
 VOID
 Dwc3Ep0StallAndRestart (IN DWC3_DEV *Dev);
+
+EFI_STATUS
+Dwc3Ep0SubmitStatus (IN DWC3_DEV *Dev, IN UINT8 PhysEpNum, IN VOID *Buffer);
 
 EFI_STATUS
 Dwc3ProcessEvents (IN DWC3_DEV *Dev);
