@@ -11,8 +11,8 @@
 	branch = release/202608
 [submodule "Mu_Basecore"]
 	path = Mu_Basecore
-	url = https://github.com/microsoft/mu_basecore.git
-	branch = release/202608
+	url = https://github.com/RigoLigoRLC/unixnu-mu-basecore.git
+	branch = unixnu-sm-t733
 [submodule "Silicium-ACPI"]
 	path = Silicium-ACPI
 	url = https://github.com/Project-Silicium/Silicium-ACPI.git
